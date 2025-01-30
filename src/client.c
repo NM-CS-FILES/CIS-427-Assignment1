@@ -4,7 +4,7 @@ sockaddr_in find_server() {
     int listen_fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 
     if (listen_fd < 0) {
-        printf("Failed To Create Listening Socket\n");
+        fatal_error("Failed To Create Listening Socket");
     }
 
     sockaddr_in listen_addr = { 0 };
@@ -13,14 +13,14 @@ sockaddr_in find_server() {
     listen_addr.sin_addr.s_addr = INADDR_ANY;
 
     if (bind(listen_fd, (sockaddr*)&listen_addr, sizeof(sockaddr)) < 0) {
-        printf("Failed To Bind Broadcast Listening Socket\n");
+        fatal_error("Failed To Bind Broadcast Listening Socket");
     }
 
     timeval timeout = { 0 };
     timeout.tv_usec = 10000;
 
     if (setsockopt(listen_fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) < 0) {
-        printf("Failed To Put Listening Socket Into Non-Blocking Mode\n");
+        fatal_error("Failed To Put Listening Socket Into Non-Blocking Mode");
     }
 
     sockaddr_in server_addr;
@@ -35,7 +35,7 @@ sockaddr_in find_server() {
             (sockaddr*)&server_addr, &server_addr_len);
 
         if (ret < 0 && errno != EWOULDBLOCK) {
-            printf("Failed To Recieve Data On Listening Socket\n");
+            fatal_error("Failed To Recieve Data On Listening Socket");
         }
 
         if (strncmp(buffer, MAGIC_TEXT, sizeof(MAGIC_TEXT)) == 0) {
@@ -57,11 +57,11 @@ int main(int argc, char** argv) {
     int conn_fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 
     if (conn_fd < 0) {
-        printf("Failed To Create Socket\n");
+        fatal_error("Failed To Create Socket");
     } 
 
     if (connect(conn_fd, (sockaddr*)&server_addr, sizeof(sockaddr)) < 0) {
-        printf("Failed To Connect %d\n", errno);
+        fatal_error("Failed To Connect To Server");
     }
 
     char input_buffer[1024]; 

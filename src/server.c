@@ -23,7 +23,13 @@ typedef struct {
     size_t size;
 } client_list;
 
-typedef void(*command_callback)(client_list_node*, char*, size_t);
+//       V-- status
+typedef bool(*command_callback)(
+    client_list_node*, // client
+    const char*,       // input
+    char*,             // output
+    size_t             // output len
+);
 
 //
 //
@@ -123,7 +129,7 @@ void printf_locked(
     va_end(vargs);
 }
 
-void vlog(
+void vlog_ns(
     const char* ns,
     const char* fmt,
     va_list vargs
@@ -135,66 +141,72 @@ void vlog(
     free(totmsg);
 }
 
-void log(
+void log_ns(
     const char* ns,
     const char* fmt,
     ...
 ) {
     va_list vargs;
     va_start(vargs, fmt);
-    vlog(ns, fmt, vargs);
+    vlog_ns(ns, fmt, vargs);
     va_end(vargs);
 }
 
-#define 
+#define log_inet(_addr, _fmt, ...) log_ns(inet_ntoa((_addr).sin_addr), (_fmt) __VA_OPT__(,) __VA_ARGS__)
 
 //
 //
 
 void buy_command(
     client_list_node* pclient,
-    char* input,
-    size_t len
+    const char* input,
+    char output,
+    size_t output_len
 ) {
-    printf_locked("Buy Command\n");
+    
 }
 
 void sell_command(
     client_list_node* pclient,
-    char* input,
-    size_t len
+    const char* input,
+    char output,
+    size_t output_len
 ) {
 
 }
 
 void list_command(
     client_list_node* pclient,
-    char* input,
-    size_t len
+    const char* input,
+    char output,
+    size_t output_len
 ) {
 
 }
 
 void balance_command(
     client_list_node* pclient,
-    char* input,
-    size_t len
+    const char* input,
+    char output,
+    size_t output_len
 ) {
 
 }
 
 void shutdown_command(
     client_list_node* pclient,
-    char* input,
-    size_t len
+    const char* input,
+    char output,
+    size_t output_len
 ) {
 
 }
 
 void quit_command(
     client_list_node* pclient,
-    char* input,
-    size_t len
+    const char* input,
+    char output,
+    size_t output_len
 ) {
 
 }
@@ -205,19 +217,21 @@ void quit_command(
 void* broadcast_task(
     void* args
 ) {
-    log("Broadcast", "Started On Port %hu", BROADCAST_PORT);
+    log_ns("Broadcast", "Started On Port %hu", BROADCAST_PORT);
 
     int broadcast_fd = -1; // socket object
 
     // create datagram socket
     if ((broadcast_fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) < 0) {
-        // todo fatal
+        log_ns("Broadcast", "Failed To Create Broadcast Socket");
+        goto broadcast_out;
     }
 
     // enable broadcasting
     int opt_true = 1;
     if (setsockopt(broadcast_fd, SOL_SOCKET, SO_BROADCAST, &opt_true, sizeof(opt_true)) < 0) {
-        // todo fatal
+        log_ns("Broadcast", "Failed To Broadcast On Socket");
+        goto broadcast_out;
     }
 
     sockaddr_in broadcast_addr = { 0 };
@@ -233,19 +247,21 @@ void* broadcast_task(
         now = clock();
 
         // I hate blocking on threads
-        if ((now - prev) / CLOCKS_PER_SEC >= 2) {
+        if ((now - prev) / CLOCKS_PER_SEC >= 3) {
             // Waste bandwidth here
             sendto(broadcast_fd, MAGIC_TEXT, strlen(MAGIC_TEXT), 0, 
                 (sockaddr*)&broadcast_addr, sizeof(sockaddr));
 
-            log("Broadcast", "Heartbeat Sent");
+            log_ns("Broadcast", "Heartbeat Sent");
 
             prev = now;
         }
     }
 
-    // close file descriptor
+broadcast_out:
+
     close(broadcast_fd);
+    *pflag = false;
 
     return NULL;
 }
@@ -257,7 +273,7 @@ void* client_task(
     char input_buffer[1024] = { 0 };
     char output_buffer[1024] = { 0 };
 
-    printf_locked("[%s] Started Client Thread\n", inet_ntoa(client->addr.sin_addr));
+    log_inet(client->addr, "Started Client Thread");
 
     const struct {
         const char* prefix;
@@ -296,11 +312,13 @@ void* client_task(
         }
 
         if (i == LENGTHOF(commands)) {
-            printf_locked("[%s] Unknown Command\n", inet_ntoa(client->addr.sin_addr));            
+            log_inet(client->addr, "Unkown Command: %s", input_buffer);
             continue;
         }
 
-        commands[i].callback(client, input_buffer, len);
+        log_inet(client->addr, "Calling Command: %s", commands[i].prefix);
+
+        commands[i].callback(client, strtok(input_buffer, " "), output_buffer, sizeof(output_buffer));
     }
 
     return NULL;
@@ -351,10 +369,8 @@ void deinitialize() {
     pthread_mutex_destroy(&DATABASE_LOCK);
 }
 
-int main() {
 
-    printf(__FUNCTION__);
-    return 1;
+int main() {
     initialize();
 
     //
@@ -375,16 +391,21 @@ int main() {
         fatal_error("Failed To Bind");
     }
 
+    log_ns("Server", "Bound To Port %hu", SERVER_PORT);
+
     if (listen(server_fd, SOMAXCONN) < 0) {
         fatal_error("Failed To Listen");
     }
 
+    log_ns("Server", "Listening For Clients");
+
     while (true) {
-        sockaddr_in client_addr;
-        socklen_t client_addr_len = sizeof(sockaddr_in);
+        struct sockaddr_in client_addr;
+        socklen_t client_addr_len = sizeof(sockaddr);
+
         int client_fd = accept(server_fd, (sockaddr*)&client_addr, &client_addr_len);
 
-        printf_locked("[%s] Accepted Client\n", inet_ntoa(client_addr.sin_addr));
+        log_inet(client_addr, "Accepted Client");
 
         if (fcntl(client_fd, F_SETFL, fcntl(client_fd, F_GETFL, 0) | O_NONBLOCK) < 0) {
             // fatal

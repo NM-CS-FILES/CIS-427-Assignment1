@@ -1,3 +1,4 @@
+#include <arpa/inet.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdbool.h>
@@ -7,7 +8,6 @@
 #include <sys/time.h>
 #include <unistd.h>
 #include <netinet/in.h>
-#include <arpa/inet.h>
 #include <fcntl.h>
 #include <ctype.h>
 #include <errno.h>
@@ -31,9 +31,13 @@ typedef struct sockaddr sockaddr;
 typedef struct sockaddr_in sockaddr_in;
 typedef struct timeval timeval;
 
-void fatal_error(
-    const char* message
+void _fatal_error(
+    const char* message,
+    const char* file,
+    size_t line
 );
+
+#define fatal_error(_msg) _fatal_error((_msg), __FILE__, __LINE__)
 
 int strincmp(
     const char* a,

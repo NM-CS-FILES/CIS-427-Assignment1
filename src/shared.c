@@ -1,16 +1,16 @@
 #include "shared.h"
 
-void fatal_error(
-    const char* message    
+void _fatal_error(
+    const char* message,
+    const char* file,
+    size_t line
 ) {
-    printf("[FATAL ERROR]: ");
-
+    printf("[FATAL]");
     if (message != NULL) {
-        printf("%s", message);
+        printf(": %s", message);
     }
-
     printf(" --> %s\n", strerror(errno));
-
+    printf("\t\\---> %s:%d\n", file, (int)line);
     exit(errno);
 }
 
@@ -42,10 +42,22 @@ char* vformat(
 ) {
     char* buffer;
     int buffer_len;
+    
+    /*Holy shit, segfaults everywhere, MSVC va_list implementation
+    works differently, or just the implementation of vprintf...
+    - https://lists.freebsd.org/pipermail/freebsd-questions/2014-November/262315.html
+          VVVVVV*/
+    va_list vargs_copy;
+    va_copy(vargs_copy, vargs);
 
     buffer_len = vsnprintf(NULL, 0, fmt, vargs);
+
+    if (buffer_len < 0) {
+        fatal_error("Invalid vformat");
+    }
+
     buffer = calloc(buffer_len + 1, sizeof(char));
-    vsnprintf(buffer, buffer_len + 1, fmt, vargs);
+    vsnprintf(buffer, buffer_len + 1, fmt, vargs_copy);
 
     return buffer;
 }

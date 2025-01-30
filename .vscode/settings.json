@@ -3,6 +3,7 @@
         "socket.h": "c",
         "shared.h": "c",
         "sqlite3.h": "c",
-        "inet.h": "c"
+        "inet.h": "c",
+        "unistd.h": "c"
     }
 }
