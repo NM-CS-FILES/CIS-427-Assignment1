@@ -9,8 +9,7 @@ void _fatal_error(
     if (message != NULL) {
         printf(": %s", message);
     }
-    printf(" --> %s\n", strerror(errno));
-    printf("\t\\---> %s:%d\n", file, (int)line);
+    printf(" --> %s\n\t\\---> %s:%d\n", strerror(errno), file, (int)line);
     exit(errno);
 }
 
@@ -43,10 +42,17 @@ char* vformat(
     char* buffer;
     int buffer_len;
     
-    /*Holy shit, segfaults everywhere, MSVC va_list implementation
-    works differently, or just the implementation of vprintf...
-    - https://lists.freebsd.org/pipermail/freebsd-questions/2014-November/262315.html
-          VVVVVV*/
+    /* Holy shit, segfault o'clock, MSVC v*printf implementation seems to copy
+    va_list contents, before performing a format
+
+    - https://lists.freebsd.org/pipermail/freebsd-questions/2014-November/262315.html 
+        > I suspect this needs to be in a WARNING section of the
+        > printf(3) man page.  The print functions that use variable
+        > arguments modify the argument list so that only one can
+        > be called."
+
+    Funny enough I did check the man page and saw nothing, thought I ruled it out early */
+
     va_list vargs_copy;
     va_copy(vargs_copy, vargs);
 

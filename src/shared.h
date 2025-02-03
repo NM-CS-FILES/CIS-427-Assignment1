@@ -39,6 +39,7 @@ void _fatal_error(
 
 #define fatal_error(_msg) _fatal_error((_msg), __FILE__, __LINE__)
 
+// MSVC had it right
 int strincmp(
     const char* a,
     const char* b,

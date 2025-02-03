@@ -34,7 +34,7 @@ sockaddr_in find_server() {
         int ret = recvfrom(listen_fd, buffer, sizeof(buffer), 0, 
             (sockaddr*)&server_addr, &server_addr_len);
 
-        if (ret < 0 && errno != EWOULDBLOCK) {
+        if (ret <= 0 && errno != EWOULDBLOCK) {
             fatal_error("Failed To Recieve Data On Listening Socket");
         }
 
@@ -69,7 +69,7 @@ int main(int argc, char** argv) {
     while (true) {
         printf("Enter Command --> ");
         fgets(input_buffer, sizeof(input_buffer), stdin);
-
+        fflush(stdin);
         send(conn_fd, input_buffer, strlen(input_buffer), 0);
     }
 }
