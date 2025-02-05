@@ -69,6 +69,7 @@ int main(int argc, char** argv) {
     while (true) {
         printf("Enter Command --> ");
         fgets(input_buffer, sizeof(input_buffer), stdin);
+        input_buffer[strcspn(input_buffer, "\n")] = '\0';
         fflush(stdin);
         send(conn_fd, input_buffer, strlen(input_buffer), 0);
     }

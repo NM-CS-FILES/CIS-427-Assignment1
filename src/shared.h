@@ -24,6 +24,9 @@
 
 #define LENGTHOF(_arr) (sizeof(_arr) / sizeof((_arr)[0]))
 
+// why EWOULDBLOCK isnt standard is beyond me
+#define FD_WOULDBLOCK    (errno == EWOULDBLOCK || errno == EAGAIN) 
+
 #define MAX(_a, _b) ((_a) > (_b) ? (_a) : (_b))
 #define MIN(_a, _b) ((_a) < (_b) ? (_a) : (_b))
 

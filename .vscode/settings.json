@@ -4,6 +4,7 @@
         "shared.h": "c",
         "sqlite3.h": "c",
         "inet.h": "c",
-        "unistd.h": "c"
+        "unistd.h": "c",
+        "type_traits": "cpp"
     }
 }
