@@ -19,17 +19,16 @@ typedef struct _client_t {
     struct _client_t* prev;
 } client_t;
 
-typedef struct _strtoken_t {
-    const char* str;
-    struct _strtoken_t* next;
-} strtoken_t;
+typedef struct {
+    char** args;
+    size_t size;
+} arg_list;
 
 typedef size_t(*command_callback)(
-    client_t*,   // client
-    char*, // input
-    size_t,      // input len
-    char*,       // output
-    size_t       // output len
+    client_t*,      // client
+    arg_list*,      // input
+    char*,          // output
+    size_t          // output len
 );
 
 //
@@ -69,46 +68,85 @@ void log_ns(
 //
 //
 
-strtoken_t* strtokenize(
-    const char* str,
-    const char* delim
+arg_list args_parse(
+    const char* input
 ) {
-    strtoken_t* head = NULL;
-    strtoken_t* tail = NULL;
+    arg_list list = { 0 };
 
-    const char* beg = str;
+    const char* beg = input;
     const char* end;
 
-    while (*beg && strchr(delim, *beg) != NULL) {
-        beg++;        
+    // count the number of arguments
+    bool last = false;
+    while (*beg) {
+        if (last != !isspace(*beg)) {
+            if ((last = !last)) {
+                list.size++;
+            }
+        }
+        beg++;
     }
 
-    if (*beg == '\0') {
-        return NULL;
+    if (list.size == 0) {
+        return list;
     }
 
-    end = beg;
+    list.args = (char**)calloc(list.size, sizeof(char*));
 
-    while (*end && strchr(delim, *end) == NULL) {
-        ++end;
+    if (list.args == NULL) {
+        fatal_error("Out Of Memory");        
     }
 
-    printf("\"%.*s\"\n", (int)(end-beg), beg);
+    //
+    //
 
-    return head;
+    char** arg_iter = list.args;
+
+    beg = input;
+    end = input;
+
+    while (*end) {
+        while (*beg && isspace(*beg)) {
+            beg++;        
+        }
+
+        if (*beg == '\0') {
+            break;
+        }
+
+        end = beg;
+
+        while (*end && !isspace(*end)) {
+            ++end;
+        }
+        
+        *arg_iter = calloc((size_t)(end - beg) + 1, sizeof(char));
+
+        if (*arg_iter == NULL) {
+            fatal_error("Out Of Memory");
+        }
+
+        memcpy(*arg_iter, beg, (size_t)(end - beg));
+        arg_iter++;
+
+        beg = end + 1;
+    }
+
+    return list;
 }
 
-void strtoken_free(
-    strtoken_t* pstrtok
+void args_free(
+    arg_list* plist
 ) {
-    strtoken_t* next;
-
-    while (pstrtok != NULL) {
-        next = pstrtok->next;
-        free(pstrtok->str);
-        free(pstrtok);
-        pstrtok = next;
+    if (plist == NULL) {
+        return;
     }
+
+    for (size_t i = 0; i != plist->size; i++) {
+        free(plist->args[i]);
+    }
+
+    free(plist->args);
 }
 
 //
@@ -116,19 +154,23 @@ void strtoken_free(
 
 size_t buy_command(
     client_t* pclient,
-    char* in,
-    size_t in_len,
+    arg_list* args,
     char* out,
     size_t out_len
 ) {
-    
+    // buy <ticker> <amount> <price> <id>
+
+    if (args->size != 5) {
+        strcpy(out, "Invalid # of Arguments");
+        return 24;
+    }
+
     return 0;
 }
 
 size_t sell_command(
     client_t* pclient,
-    char* in,
-    size_t in_len,
+    arg_list* args,
     char* out,
     size_t out_len
 ) {
@@ -137,8 +179,7 @@ size_t sell_command(
 
 size_t list_command(
     client_t* pclient,
-    char* in,
-    size_t in_len,
+    arg_list* args,
     char* out,
     size_t out_len
 ) {
@@ -147,8 +188,7 @@ size_t list_command(
 
 size_t balance_command(
     client_t* pclient,
-    char* in,
-    size_t in_len,
+    arg_list* args,
     char* out,
     size_t out_len
 ) {
@@ -157,8 +197,7 @@ size_t balance_command(
 
 size_t shutdown_command(
     client_t* pclient,
-    char* in,
-    size_t in_len,
+    arg_list* args,
     char* out,
     size_t out_len
 ) {
@@ -167,12 +206,12 @@ size_t shutdown_command(
 
 size_t quit_command(
     client_t* pclient,
-    char* in,
-    size_t in_len,
+    arg_list* args,
     char* out,
     size_t out_len
 ) {
-    return true;
+    log_inet(pclient->addr, "Quit Command");
+    return 0;
 }
 
 //
@@ -227,12 +266,17 @@ void client_handle(
 
     log_inet(pclient->addr, "Client Ran Command: %s", commands[command_idx].prefix);
 
+    arg_list args = args_parse(in_buffer);
+    
     char out_buffer[1024];
-    size_t written_len = commands[command_idx].callback(pclient, 
-        strtok(in_buffer, WHITESPACE_DELIM), in_len, out_buffer, LENGTHOF(out_buffer));
+
+    size_t written_len = commands[command_idx].callback(pclient, &args, 
+        out_buffer, LENGTHOF(out_buffer));
+    
+    args_free(&args);
 
     if (written_len != 0) {
-        // send response to client
+        ssize_t ret = send(SERVER_FD, out_buffer, written_len, MSG_DONTWAIT);
     }
 }
 
@@ -247,7 +291,7 @@ void client_accept(
     client_t* new_client = (client_t*)calloc(1, sizeof(client_t));
 
     if (new_client == NULL) {
-        fatal_error("Total Memory Error");
+        fatal_error("Out Of Memory");
     }
 
     new_client->addr = *pclient_addr;
@@ -373,20 +417,18 @@ void initialize() {
 }
 
 void deinitialize() {
+    log_ns("DeInit", "Closing Sockets");
     close(SERVER_FD);
     close(BROADCAST_FD);
 }
 
 int main() {
 
-    strtoken_t* tokl = strtokenize("Hello, World! I Am Here", WHITESPACE_DELIM);
-    strtoken_t* cpy = tokl; 
+    arg_list l = args_parse("    Hello    World a   b  c    d   e f     \n");
 
-    while (cpy != NULL) {
-        cpy = cpy->next;
+    for (size_t i = 0; i != l.size; i++) {
+        printf("[%zu] -> '%s'\n", i, l.args[i]);
     }
-
-    strtoken_free(tokl);
 
     return 1;
 
