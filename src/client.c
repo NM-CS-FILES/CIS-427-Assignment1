@@ -50,27 +50,55 @@ sockaddr_in find_server() {
 }
 
 int main(int argc, char** argv) {
-    sockaddr_in server_addr = find_server();
+
+    sockaddr_in server_addr;
+
+    if (argc >= 2) {
+        if (inet_pton(AF_INET, argv[1], &(server_addr.sin_addr)) != 1) {
+            printf("Provided Address Argument Not Valid\n");
+            server_addr = find_server();
+        }
+    } else {
+        server_addr = find_server();
+    }
+
     server_addr.sin_port = htons(SERVER_PORT);
     server_addr.sin_family = AF_INET;
 
-    int conn_fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    int sock_fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 
-    if (conn_fd < 0) {
+    if (sock_fd < 0) {
         fatal_error("Failed To Create Socket");
     } 
 
-    if (connect(conn_fd, (sockaddr*)&server_addr, sizeof(sockaddr)) < 0) {
+    if (connect(sock_fd, (sockaddr*)&server_addr, sizeof(sockaddr)) < 0) {
         fatal_error("Failed To Connect To Server");
     }
 
-    char input_buffer[1024]; 
+    char send_buffer[1024] = { }; 
+    char recv_buffer[1024] = { }; 
 
     while (true) {
-        printf("Enter Command --> ");
-        fgets(input_buffer, sizeof(input_buffer), stdin);
-        input_buffer[strcspn(input_buffer, "\n")] = '\0';
+        printf("<-- ");
+        fgets(send_buffer, LENGTHOF(send_buffer), stdin);
+
+        size_t len = strcspn(send_buffer, "\n");
+
+        send_buffer[len] = '\0';
         fflush(stdin);
-        send(conn_fd, input_buffer, strlen(input_buffer), 0);
+
+        if (len != 0) {
+            int ret = send(sock_fd, send_buffer, strlen(send_buffer), 0);
+            ret = recv(sock_fd, recv_buffer, LENGTHOF(recv_buffer), 0);
+
+            if (ret <= 0) {
+                // stuff
+            }
+
+            printf("--> %.*s\n", ret, recv_buffer);
+        }
     }
+
+exit:
+    close(sock_fd);
 }

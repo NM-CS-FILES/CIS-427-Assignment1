@@ -11,7 +11,7 @@
 #include <fcntl.h>
 #include <ctype.h>
 #include <errno.h>
-#include <regex.h>
+#include <pthread.h>
 
 #include "sqlite3.h"
 
@@ -20,6 +20,8 @@
 // my last four id digits were restricted :( 
 #define SERVER_PORT 12344 
 #define BROADCAST_PORT 12345
+
+#define MAGIC_EOR '\x1'
 
 #define MAGIC_TEXT "IAMHERE!"
 
