@@ -1,45 +1,82 @@
 #include "shared.h"
 
-#define USERS_CREATE_QUERY  "CREATE TABLE IF NOT EXISTS Users(ID INTEGER PRIMARY KEY AUTOINCREMENT,first_name TEXT,last_name TEXT,user_name TEXT NOT NULL,password TEXT,usd_balance DOUBLE NOT NULL);"
-#define USERS_EMPTY_QUERY   "SELECT count(*) FROM (select 0 from Users limit 1)"
+#define CODE_200 "200 OK"
+#define CODE_400 "400 Invalid Command"
+#define CODE_401 "401 User Does Not Exist"
+#define CODE_402 "402 Insufficient Balance"
+#define CODE_403 "403 Message Format Error"
+
+#define USERS_CREATE_QUERY "CREATE TABLE IF NOT EXISTS Users(ID INTEGER PRIMARY KEY AUTOINCREMENT,first_name TEXT,last_name TEXT,user_name TEXT NOT NULL,password TEXT,usd_balance DOUBLE NOT NULL);"
+#define USERS_EMPTY_QUERY "SELECT COUNT(*) FROM (select 0 from Users limit 1)"
+#define USERS_COUNT_QUERY "SELECT COUNT(*) FROM Users"
+#define USERS_INSERT_QUERY "INSERT INTO Users (first_name, last_name, user_name, password, usd_balance) VALUES (?1, ?2, ?3, ?4, ?5)"
+#define USERS_BALANCE_QUERY "SELECT usd_balance FROM Users WHERE ID = ?1"
+#define USERS_UPDATE_BALANCE_QUERY "UPDATE Users SET usd_balance = ?1 WHERE id = ?2"
 
 #define STOCKS_CREATE_QUERY "CREATE TABLE IF NOT EXISTS Stocks(ID INTEGER PRIMARY KEY AUTOINCREMENT,stock_symbol VARCHAR(4) NOT NULL,stock_name VARCHAR(20) NOT NULL,stock_balance DOUBLE,user_id INTEGER,FOREIGN KEY (user_id) REFERENCES Users (ID));"
-#define STOCKS_LIST_QUERY   ""
-
-#define WHITESPACE_DELIM    " \t\b\r\n\a"
+#define STOCKS_INSERT_QUERY "INSERT INTO Stocks (stock_symbol, stock_balance, user_id) VALUES (?1, ?2, ?3)"
+#define STOCKS_COUNT_QUERY "SELECT COUNT(*) FROM (select 0 from Stocks limit 1) WHERE user_id = ?1 AND stock_symbol = ?2"
+#define STOCKS_BALANCE_QUERY "SELECT stock_balance from STOCKS WHERE user_id = ?1 AND stock_symbol = ?2"
+#define STOCKS_UPDATE_BALANCE_QUERY "UPDATE Stocks SET stock_balance = ?1 WHERE id = ?2 AND stock_symbol = ?3"
 
 //
+// Structures
 //
 
 typedef struct _client_t {
-    int id;
     int sock_fd;
     sockaddr_in addr;
     struct _client_t* next;
     struct _client_t* prev;
 } client_t;
 
-typedef struct {
-    char** args;
-    size_t size;
-} arg_list;
-
-typedef size_t(*command_callback)(
-    client_t*,      // client
-    arg_list*,      // input
-    char*,          // output
-    size_t          // output len
+typedef void(*command_callback)(
+    client_t*,  // client
+    const char* // input
 );
 
+typedef struct _command_t {
+    const char* prefix;
+    command_callback callback;
+} command_t;
+
 //
+// Declarations
+//
+
+void buy_command(client_t*, const char*);
+void sell_command(client_t*, const char*);
+void list_command(client_t*, const char*);
+void balance_command(client_t*, const char*);
+void shutdown_command(client_t*, const char*);
+void quit_command(client_t*, const char*);
+
+void client_handle(client_t*, const char*, size_t);
+void client_accept(int, const sockaddr_in*);
+void client_remove(client_t*);
+void client_send(client_t*, const char*, ...);
+
+//
+// State / Global Variables
 //
 
 sqlite3* DATABASE;
 client_t* CLIENT_LIST;
+
 int SERVER_FD;
 int BROADCAST_FD;
 
+command_t COMMANDS[] = {
+    { "buy",      buy_command      },
+    { "sell",     sell_command     },
+    { "list",     list_command     },
+    { "balance",  balance_command  },
+    { "shutdown", shutdown_command },
+    { "quit",     quit_command     },
+};
+
 //
+// Logging Utils
 //
 
 void vlog_ns(
@@ -66,153 +103,204 @@ void log_ns(
 #define log_inet(_addr, _fmt, ...) log_ns(inet_ntoa((_addr).sin_addr), (_fmt) __VA_OPT__(,) __VA_ARGS__)
 
 //
+// Database Interactions
 //
 
-arg_list args_parse(
-    const char* input
+void db_add_user(
+    const char* first_name,
+    const char* last_name,
+    const char* user_name,
+    const char* password,
+    double balance
 ) {
-    arg_list list = { 0 };
+    sqlite3_stmt* statement;
 
-    const char* beg = input;
-    const char* end;
+    int ret = sqlite3_prepare_v2(DATABASE, USERS_INSERT_QUERY, -1, &statement, NULL);
 
-    // count the number of arguments
-    bool last = false;
-    while (*beg) {
-        if (last != !isspace(*beg)) {
-            if ((last = !last)) {
-                list.size++;
-            }
-        }
-        beg++;
-    }
+    fatal_assert(ret == SQLITE_OK, "Failed To Prepare User Insertion");
 
-    if (list.size == 0) {
-        return list;
-    }
+    sqlite3_bind_text(statement, 1, first_name, -1, NULL);
+    sqlite3_bind_text(statement, 2, last_name, -1, NULL);
+    sqlite3_bind_text(statement, 3, user_name, -1, NULL);
+    sqlite3_bind_text(statement, 4, password, -1, NULL);
+    sqlite3_bind_double(statement, 5, balance);
 
-    list.args = (char**)calloc(list.size, sizeof(char*));
-
-    if (list.args == NULL) {
-        fatal_error("Out Of Memory");        
-    }
-
-    //
-    //
-
-    char** arg_iter = list.args;
-
-    beg = input;
-    end = input;
-
-    while (*end) {
-        while (*beg && isspace(*beg)) {
-            beg++;        
-        }
-
-        if (*beg == '\0') {
-            break;
-        }
-
-        end = beg;
-
-        while (*end && !isspace(*end)) {
-            ++end;
-        }
-        
-        *arg_iter = calloc((size_t)(end - beg) + 1, sizeof(char));
-
-        if (*arg_iter == NULL) {
-            fatal_error("Out Of Memory");
-        }
-
-        memcpy(*arg_iter, beg, (size_t)(end - beg));
-        arg_iter++;
-
-        beg = end + 1;
-    }
-
-    return list;
+    fatal_assert(sqlite3_step(statement) == SQLITE_DONE, "Failed To Run User Insertion Query");
+    fatal_assert(sqlite3_finalize(statement) == SQLITE_OK, "Failed To Finalize User Insertion Query");
 }
 
-void args_free(
-    arg_list* plist
+double db_get_balance(
+    int user_id
 ) {
-    if (plist == NULL) {
+    sqlite3_stmt* statement;
+
+    int ret = sqlite3_prepare_v2(DATABASE, USERS_BALANCE_QUERY, -1, &statement, NULL);
+
+    fatal_assert(ret == SQLITE_OK, "Failed To Prepare User Balance Query");
+
+    sqlite3_bind_int(statement, 1, user_id);
+
+    ret = sqlite3_step(statement);
+
+    double balance = sqlite3_column_double(statement, 0);
+
+    fatal_assert(sqlite3_finalize(statement) == SQLITE_OK, "Failed To Finalize User Balance Query");
+
+    return balance;
+}
+
+void db_set_balance(
+    int user_id,
+    double balance
+) {
+    sqlite3_stmt* statement;
+
+    int ret = sqlite3_prepare_v2(DATABASE, USERS_UPDATE_BALANCE_QUERY, -1, &statement, NULL);
+
+    fatal_assert(ret == SQLITE_OK, "Failed To Prepare Balance Update Query");
+
+    sqlite3_bind_double(statement, 1, balance);
+    sqlite3_bind_int(statement, 2, user_id);
+
+    fatal_assert(sqlite3_step(statement) == SQLITE_DONE, "Failed To Run Balance Update Query");
+    fatal_assert(sqlite3_finalize(statement) == SQLITE_OK, "Failed To Finalize Balance Update Query");
+}
+
+int db_user_count() {
+    sqlite3_stmt* statement;
+
+    int ret = sqlite3_prepare_v2(DATABASE, USERS_COUNT_QUERY, -1, &statement, NULL);
+
+    fatal_assert(ret == SQLITE_OK, "Failed To Prepare User Count Query");
+
+    ret = sqlite3_step(statement);
+
+    int count = sqlite3_column_int(statement, 0);
+
+    fatal_assert(sqlite3_finalize(statement) == SQLITE_OK, "Failed To Finalize User Count Query");
+
+    return count;
+}
+
+bool db_has_stock(
+    int user_id,
+    const char* symbol
+) {
+    sqlite3_stmt* statement;
+
+    int ret = sqlite3_prepare_v2(DATABASE, STOCKS_COUNT_QUERY, -1, &statement, NULL);
+
+    fatal_assert(ret == SQLITE_OK, "Failed To Prepare Stock Count Query");
+    
+    sqlite3_bind_int(statement, 1, user_id);
+    sqlite3_bind_text(statement, 2, symbol, -1, NULL);
+
+    ret = sqlite3_step(statement);
+
+    int count = sqlite3_column_int(statement, 0);
+
+    fatal_assert(sqlite3_finalize(statement) == SQLITE_OK, "Failed To Finalize Stock Count Query");
+
+    return !!count;
+}
+
+double db_get_stock_balance(
+    int user_id,
+    const char* symbol
+) {
+    sqlite3_stmt* statement;
+
+    int ret = sqlite3_prepare_v2(DATABASE, STOCKS_BALANCE_QUERY, -1, &statement, NULL);
+
+    fatal_assert(ret == SQLITE_OK, "Failed To Prepare User Balance Query");
+
+    sqlite3_bind_int(statement, 1, user_id);
+
+    ret = sqlite3_step(statement);
+
+    double balance = sqlite3_column_double(statement, 0);
+
+    fatal_assert(sqlite3_finalize(statement) == SQLITE_OK, "Failed To Finalize User Balance Query");
+
+    return balance;
+}
+
+void db_set_stock_balance(
+    int user_id,
+    const char* symbol,
+    double balance
+) {
+    sqlite3_stmt* statement;
+
+}
+
+//
+//  Commands
+//
+
+void buy_command(
+    client_t* pclient, 
+    const char* args
+) { 
+    char ticker[1024];
+    double amount;
+    double price;
+    uint32_t id;
+    
+    int arg_count = sscanf(args, "%s %lf %lf %u", ticker, &amount, &price, &id);
+    
+    if (arg_count != 4 || amount <= 0.0 || price <= 0.0) {
+        client_send(pclient, CODE_403);
         return;
     }
 
-    for (size_t i = 0; i != plist->size; i++) {
-        free(plist->args[i]);
+    int user_count = db_user_count();
+
+    if (id == 0 || id > user_count) {
+        client_send(pclient, CODE_401);
+        return;
+    }
+    
+    double cost = amount * price;
+    double balance = db_get_balance(id);
+
+    if (cost > balance) {
+        client_send(pclient, CODE_402);
+        return;
     }
 
-    free(plist->args);
+    db_set_balance(id, balance - cost);
+
+    
 }
 
-//
-//
-
-size_t buy_command(
-    client_t* pclient,
-    arg_list* args,
-    char* out,
-    size_t out_len
+void sell_command(
+    client_t* pclient, 
+    const char* args
 ) {
-    // buy <ticker> <amount> <price> <id>
 
-    if (args->size != 5) {
-        strcpy(out, "Invalid # of Arguments");
-        return 24;
-    }
-
-    return 0;
 }
 
-size_t sell_command(
-    client_t* pclient,
-    arg_list* args,
-    char* out,
-    size_t out_len
-) {
-    return 0;
-}
+void list_command(
+    client_t* pclient, 
+    const char* args
+) { }
 
-size_t list_command(
-    client_t* pclient,
-    arg_list* args,
-    char* out,
-    size_t out_len
-) {
-    return true;
-}
+void balance_command(
+    client_t* pclient, 
+    const char* args
+) { }
 
-size_t balance_command(
-    client_t* pclient,
-    arg_list* args,
-    char* out,
-    size_t out_len
-) {
-    return true;
-}
+void shutdown_command(
+    client_t* pclient, 
+    const char* args
+) { }
 
-size_t shutdown_command(
-    client_t* pclient,
-    arg_list* args,
-    char* out,
-    size_t out_len
-) {
-    return true;
-}
+void quit_command(
+    client_t* pclient, 
+    const char* args
+) { }
 
-size_t quit_command(
-    client_t* pclient,
-    arg_list* args,
-    char* out,
-    size_t out_len
-) {
-    log_inet(pclient->addr, "Quit Command");
-    return 0;
-}
 
 //
 //
@@ -233,66 +321,48 @@ void heartbeat() {
     }
 }
 
+//
+//  Client Interactions
+//
+
 void client_handle(
     client_t* pclient,
     const char* in_buffer,
     size_t in_len
 ) {
-    const struct {
-        const char* prefix;
-        command_callback callback;
-    } commands[] = {
-        { "buy",      buy_command      },
-        { "sell",     sell_command     },
-        { "list",     list_command     },
-        { "balance",  balance_command  },
-        { "shutdown", shutdown_command },
-        { "quit",     quit_command     }
-    };
-
     size_t command_idx = 0;
-    while (command_idx != LENGTHOF(commands)) {
-        if (strincmp(commands[command_idx].prefix, in_buffer, 
-            strlen(commands[command_idx].prefix)) == 0) {
+    while (command_idx != LENGTHOF(COMMANDS)) {
+        if (strincmp(COMMANDS[command_idx].prefix, in_buffer, 
+            strlen(COMMANDS[command_idx].prefix)) == 0) {
             break;
         }
         command_idx++;
     }
 
-    if (command_idx == LENGTHOF(commands)) {
-        log_inet(pclient->addr, "Client Entered Unknown Command");
+    if (command_idx == LENGTHOF(COMMANDS)) {
+        client_send(pclient, CODE_400);
         return;
     }
 
-    log_inet(pclient->addr, "Client Ran Command: %s", commands[command_idx].prefix);
-
-    arg_list args = args_parse(in_buffer);
+    log_inet(pclient->addr, "Client Ran Command: %s", COMMANDS[command_idx].prefix);
     
-    char out_buffer[1024];
+    const char* args = strchr(in_buffer, ' ');
 
-    size_t written_len = commands[command_idx].callback(pclient, &args, 
-        out_buffer, LENGTHOF(out_buffer));
-    
-    args_free(&args);
-
-    if (written_len != 0) {
-        ssize_t ret = send(SERVER_FD, out_buffer, written_len, MSG_DONTWAIT);
-    }
+    COMMANDS[command_idx].callback(
+        pclient,
+        args == NULL ? args : args + 1
+    );
 }
 
 void client_accept(
     int client_fd,
     const sockaddr_in* pclient_addr
 ) {
-    if (client_fd < 0 || pclient_addr == NULL) {
-        fatal_error("Invalid Arguments");
-    }
+    fatal_assert(client_fd >= 0 && pclient_addr != NULL, "Invalid Arguments");
 
     client_t* new_client = (client_t*)calloc(1, sizeof(client_t));
 
-    if (new_client == NULL) {
-        fatal_error("Out Of Memory");
-    }
+    fatal_assert(new_client != NULL, "Out Of Memory");
 
     new_client->addr = *pclient_addr;
     new_client->sock_fd = client_fd;
@@ -325,6 +395,26 @@ void client_remove(
     }
 }
 
+void client_send(
+    client_t* pclient,
+    const char* fmt,
+    ...
+) {
+    va_list vargs;
+    va_start(vargs, fmt);
+
+    char* msg = vformat(fmt, vargs);
+
+    int ret = send(pclient->sock_fd, msg, strlen(msg), MSG_DONTWAIT);
+
+    if (ret <= 0 && !FD_WOULDBLOCK) {
+        log_inet(pclient->addr, "Failed To Send Data, Removing...");
+        client_remove(pclient);
+    }
+
+    va_end(vargs);
+}
+
 void client_recv(
     client_t* pclient
 ) {
@@ -345,8 +435,6 @@ void client_recv(
     }
 
     in_buffer[ret] = '\0';
-
-    log_inet(pclient->addr, "Got Data: %s", in_buffer);
 
     client_handle(pclient, in_buffer, ret);
 }
@@ -393,6 +481,8 @@ void initialize() {
         fatal_error("Failed To Enable Broadcasting On Socket");
     }
 
+    log_ns("Init", "Broadcast Socket Created");
+
     //
 
     CLIENT_LIST = NULL;
@@ -414,25 +504,30 @@ void initialize() {
         sqlite3_free(error_msg);
     }
 
+    log_ns("Init", "Database Connected");
 }
 
 void deinitialize() {
-    log_ns("DeInit", "Closing Sockets");
+    // clean sockets
+
     close(SERVER_FD);
     close(BROADCAST_FD);
+    
+    log_ns("DeInit", "Sockets Closed");
+
+    // close database
+
+    sqlite3_close(DATABASE);
+
+    log_ns("DeInit", "Database Disconnected");
 }
 
 int main() {
+    initialize();
 
-    arg_list l = args_parse("    Hello    World a   b  c    d   e f     \n");
-
-    for (size_t i = 0; i != l.size; i++) {
-        printf("[%zu] -> '%s'\n", i, l.args[i]);
-    }
+    db_set_balance(1, 10);
 
     return 1;
-
-    initialize();
 
     //
     //
@@ -476,4 +571,3 @@ int main() {
 
     deinitialize();
 }
-

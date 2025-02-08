@@ -3,14 +3,15 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <memory.h>
-#include <pthread.h>
 #include <sys/socket.h>
 #include <sys/time.h>
+#include <time.h>
 #include <unistd.h>
 #include <netinet/in.h>
 #include <fcntl.h>
 #include <ctype.h>
 #include <errno.h>
+#include <regex.h>
 
 #include "sqlite3.h"
 
@@ -25,7 +26,7 @@
 #define LENGTHOF(_arr) (sizeof(_arr) / sizeof((_arr)[0]))
 
 // why EWOULDBLOCK isnt standard is beyond me
-#define FD_WOULDBLOCK    (errno == EWOULDBLOCK || errno == EAGAIN) 
+#define FD_WOULDBLOCK (errno == EWOULDBLOCK || errno == EAGAIN) 
 
 #define MAX(_a, _b) ((_a) > (_b) ? (_a) : (_b))
 #define MIN(_a, _b) ((_a) < (_b) ? (_a) : (_b))
@@ -41,6 +42,8 @@ void _fatal_error(
 );
 
 #define fatal_error(_msg) _fatal_error((_msg), __FILE__, __LINE__)
+
+#define fatal_assert(_expr, _msg) { if (!(_expr)) { fatal_error(_msg); } }
 
 // MSVC had it right
 int strincmp(
